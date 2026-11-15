@@ -1,5 +1,28 @@
 [
 	{
+		"version": "0.5.4",
+		"date": "2026-11-15",
+		"title": {
+			"ru": "Ввод без застрявших режимов",
+			"en": "Typing without stuck modes"
+		},
+		"icon": "Keyboard",
+		"items": {
+			"ru": [
+				"Хоткеи с Alt, Cmd, Ctrl и Shift работают и тогда, когда macOS не указывает левую или правую клавишу.",
+				"После прерывания перехвата клавиатуры хоткеи и Vim сбрасываются вместе. Старые команды больше не выполняются после восстановления ввода.",
+				"Vim отменяет незавершённую команду при переходе в другое текстовое поле.",
+				"Если сбой повторится, `kumiko query input` покажет режимы и счётчики ошибок без записи набираемого текста."
+			],
+			"en": [
+				"Alt, Cmd, Ctrl and Shift shortcuts keep working when macOS omits the modifier key's side.",
+				"Hotkeys and Vim reset together after keyboard interception is interrupted. Queued commands from before the interruption no longer run when input resumes.",
+				"Vim cancels unfinished commands when you move to another text field.",
+				"If an input issue returns, `kumiko query input` shows modes and error counters without recording what you type."
+			]
+		}
+	},
+	{
 		"version": "0.5.3",
 		"date": "2026-11-15",
 		"title": {
