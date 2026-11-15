@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private(set) var bar: Bar?
 	private(set) var menuBar: MenuBarHider?
 	private var vim: Vim?
+	var vimInputMode: String? { vim?.inputMode }
 	private var windowServer: WindowServerEvents?
 	private var recordingHotkeys = false
 
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		// Vim gets the keys the hotkeys leave alone, so a hotkey still works inside a text field.
 		let vim = Vim(bus: bus, config: config.vim)
 		hotkeys.passthrough = { event, isDown in vim.handle(event, isDown: isDown) }
+		hotkeys.resetPassthrough = { vim.resetInput() }
 		self.windowServer = windowServer
 		self.bar = bar
 		self.menuBar = menuBar

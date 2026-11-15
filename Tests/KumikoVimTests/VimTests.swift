@@ -119,6 +119,30 @@ struct EngineTests {
 		engine.input(.key("<Esc>"))
 	}
 
+	@Test func newEngineDoesNotReuseAnUnfinishedCommand() {
+		let old = engine("old field")
+		type(":set", into: old)
+		defer { old.input(.key("<Esc>")) }
+		#expect(old.mode == .commandLine)
+		let next = Engine(commands: [])
+		#expect(next.mode == .normal)
+		#expect(next.commandLine == nil)
+	}
+
+	@Test(arguments: [":set", "d", "v", "i"])
+	func inputResetCancelsTheCoreMode(_ keys: String) {
+		let engine = engine("old field")
+		type(keys, into: engine)
+		engine.resetInput()
+		#expect(engine.mode == .normal)
+		#expect(engine.commandLine == nil)
+		#expect(engine.selection == nil)
+		engine.load(Text("one two"), cursor: (1, 0))
+		type("w", into: engine)
+		#expect(engine.text.string == "one two")
+		#expect(engine.cursor == (1, 4))
+	}
+
 	@Test func langmapTurnsCyrillicIntoCommands() {
 		let engine = Engine(commands: ["set langmap=цв;wd"])
 		engine.load(Text("hello brave world"), cursor: (1, 0))

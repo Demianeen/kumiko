@@ -14,7 +14,7 @@ let usage = """
 	  reload     reread kumiko.toml
 	  settings [general|advanced|about|windows|workspaces|rules|hotkeys|bar|borders|vim]
 	             open the settings window
-	  query windows|focused|workspaces|displays
+	  query windows|focused|workspaces|displays|input
 	             print state as JSON
 
 	  window focus west|east|north|south|first|last|recent|stack-next|stack-prev

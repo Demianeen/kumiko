@@ -14,6 +14,10 @@ struct HeldModifiers: OptionSet, Hashable {
 	static let leftShift = HeldModifiers(rawValue: 1 << 6)
 	static let rightShift = HeldModifiers(rawValue: 1 << 7)
 	static let fn = HeldModifiers(rawValue: 1 << 8)
+	static let unsidedCmd = HeldModifiers(rawValue: 1 << 9)
+	static let unsidedAlt = HeldModifiers(rawValue: 1 << 10)
+	static let unsidedCtrl = HeldModifiers(rawValue: 1 << 11)
+	static let unsidedShift = HeldModifiers(rawValue: 1 << 12)
 
 	/// The held set a remap sends for a combo: generic modifiers are pressed on the left.
 	init(_ modifiers: Set<KeyCombo.Modifier>) {
@@ -196,25 +200,26 @@ struct Engine {
 	/// counts when the binding names it, because macOS sets it on its own for arrows and F-keys.
 	static func matches(_ wanted: Set<KeyCombo.Modifier>, _ held: HeldModifiers) -> Bool {
 		let families: [(generic: KeyCombo.Modifier, left: KeyCombo.Modifier, right: KeyCombo.Modifier,
-		                 leftHeld: HeldModifiers, rightHeld: HeldModifiers)] = [
-			(.cmd, .lcmd, .rcmd, .leftCmd, .rightCmd),
-			(.alt, .lalt, .ralt, .leftAlt, .rightAlt),
-			(.ctrl, .lctrl, .rctrl, .leftCtrl, .rightCtrl),
-			(.shift, .lshift, .rshift, .leftShift, .rightShift),
+		                 leftHeld: HeldModifiers, rightHeld: HeldModifiers, unsided: HeldModifiers)] = [
+			(.cmd, .lcmd, .rcmd, .leftCmd, .rightCmd, .unsidedCmd),
+			(.alt, .lalt, .ralt, .leftAlt, .rightAlt, .unsidedAlt),
+			(.ctrl, .lctrl, .rctrl, .leftCtrl, .rightCtrl, .unsidedCtrl),
+			(.shift, .lshift, .rshift, .leftShift, .rightShift, .unsidedShift),
 		]
 
 		for family in families {
 			let left = held.contains(family.leftHeld)
 			let right = held.contains(family.rightHeld)
+			let unsided = held.contains(family.unsided)
 
 			let ok = if wanted.contains(family.generic) {
-				left || right
+				left || right || unsided
 			} else if wanted.contains(family.left) {
-				left && !right
+				left && !right && !unsided
 			} else if wanted.contains(family.right) {
-				right && !left
+				right && !left && !unsided
 			} else {
-				!left && !right
+				!left && !right && !unsided
 			}
 
 			guard ok else { return false }

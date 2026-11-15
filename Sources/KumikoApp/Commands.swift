@@ -1,5 +1,6 @@
 import AppKit
 import KumikoCore
+import KumikoHotkeys
 
 /// Answers the CLI. Each command is a word followed by its arguments, the way it was typed.
 @MainActor
@@ -91,6 +92,9 @@ struct Commands {
 		guard let tracker = app.tracker else { return .failure("window tracking is not running") }
 
 		switch args.first {
+		case "input":
+			guard let hotkeys = app.hotkeys else { return .failure("hotkeys are not running") }
+			return json(InputSnapshot(hotkeys: hotkeys.diagnostics, vimMode: app.vimInputMode))
 		case "windows":
 			return json(tracker.sortedWindows.map(describe))
 		case "workspaces":
@@ -103,8 +107,13 @@ struct Commands {
 			}
 			return json(describe(window))
 		default:
-			return .failure("usage: kumiko query windows|focused|workspaces|displays")
+			return .failure("usage: kumiko query windows|focused|workspaces|displays|input")
 		}
+	}
+
+	private struct InputSnapshot: Encodable {
+		var hotkeys: InputDiagnostics
+		var vimMode: String?
 	}
 
 	private func describe(_ window: WindowInfo) -> QueriedWindow {

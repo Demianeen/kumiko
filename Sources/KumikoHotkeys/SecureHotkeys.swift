@@ -7,6 +7,9 @@ final class SecureHotkeys {
 	private var registrations: [KeyCombo: (EventHotKeyRef, UInt32)] = [:]
 	private var nextID: UInt32 = 0
 	private let pressed: (KeyCombo) -> Void
+	private(set) var registrationFailures = 0
+	private(set) var lastError: OSStatus?
+	var registrationCount: Int { registrations.count }
 
 	init(pressed: @escaping (KeyCombo) -> Void) {
 		self.pressed = pressed
@@ -31,7 +34,10 @@ final class SecureHotkeys {
 		if handler == nil {
 			var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
 			let context = Unmanaged.passUnretained(self).toOpaque()
-			guard InstallEventHandler(GetApplicationEventTarget(), secureHotkeyCallback, 1, &type, context, &handler) == noErr else {
+			let status = InstallEventHandler(GetApplicationEventTarget(), secureHotkeyCallback, 1, &type, context, &handler)
+			guard status == noErr else {
+				registrationFailures += 1
+				lastError = status
 				return
 			}
 		}
@@ -41,6 +47,10 @@ final class SecureHotkeys {
 			let id = EventHotKeyID(signature: Self.signature, id: nextID)
 			let status = RegisterEventHotKey(UInt32(combo.keyCode), Self.flags(combo), id, GetApplicationEventTarget(), 0, &reference)
 			if status == noErr, let reference { registrations[combo] = (reference, nextID) }
+			else {
+				registrationFailures += 1
+				lastError = status
+			}
 		}
 	}
 
