@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.4](https://github.com/aimuzov/kumiko/compare/v0.5.3...v0.5.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* **input:** preserve modifiers and reset interrupted keyboard state ([cc3b2d3](https://github.com/aimuzov/kumiko/commit/cc3b2d30c750c08e5526072e92aefdefa191f6cf))
+* **input:** preserve modifiers and reset interrupted keyboard state ([d1474fe](https://github.com/aimuzov/kumiko/commit/d1474fecc629e3f63016b6e1aad960e2c1c2c46a))
+* **input:** stop remaining actions when the input session changes ([df1d37c](https://github.com/aimuzov/kumiko/commit/df1d37cf412ea641ecfd9698ffd1ebb3758c39cd))
+* **input:** stop remaining actions when the input session changes ([04f58f4](https://github.com/aimuzov/kumiko/commit/04f58f4163ec389f098137381c93ce751b0e3138))
+
 ## [0.5.3](https://github.com/aimuzov/kumiko/compare/v0.5.2...v0.5.3) (2026-11-15)
 
 
