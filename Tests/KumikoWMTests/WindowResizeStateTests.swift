@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import KumikoCore
 @testable import KumikoWM
 import Testing
@@ -76,5 +77,27 @@ struct WindowResizeStateTests {
 		state.record(nil)
 		#expect(state.axes == WindowResizeAxes(width: true, height: true))
 		#expect(state.needsCheck)
+	}
+
+	@Test func repeatedRejectionEventuallyChecksForNewConstraints() {
+		var state = WindowResizeState()
+		let now = Date(timeIntervalSince1970: 1000)
+		state.record(WindowResizeAxes(width: true, height: true))
+		let requested = CGSize(width: 900, height: 600)
+		let first = state.rejected(requested, actual: size, at: now)
+		#expect(first)
+		state.record(WindowResizeAxes(width: true, height: true), at: now)
+		let immediate = state.rejected(requested, actual: size, at: now.addingTimeInterval(1))
+		#expect(!immediate)
+		state.update(settable: true, title: "Main", identifier: nil, previous: size, size: size, at: now.addingTimeInterval(31))
+		#expect(state.needsCheck)
+	}
+
+	@Test func measuredBaselineDoesNotPromoteAFixedAxis() {
+		var state = WindowResizeState()
+		let measured = CGSize(width: 800, height: 500)
+		state.record(WindowResizeAxes(width: false, height: true), baseline: measured)
+		state.update(settable: true, title: "Main", identifier: nil, previous: size, size: measured)
+		#expect(state.axes == WindowResizeAxes(width: false, height: true))
 	}
 }

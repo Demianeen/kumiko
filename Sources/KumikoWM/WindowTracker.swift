@@ -394,10 +394,10 @@ public final class WindowTracker {
 		guard resizeChecks[id] == nil, Date() >= (resizeRetryAfter[id] ?? .distantPast) else { return }
 		let check = ResizeCheck(element)
 		resizeChecks[id] = check
-		writer.measureResize(pid: pid, check: check) { [weak self] axes in
+		writer.measureResize(pid: pid, check: check) { [weak self] axes, baseline in
 			guard let self, self.isRunning, self.resizeChecks[id] === check, self.windows[id] != nil else { return }
 			self.resizeChecks[id] = nil
-			self.resizeStates[id, default: WindowResizeState()].record(axes)
+			self.resizeStates[id, default: WindowResizeState()].record(axes, baseline: baseline)
 			if axes == nil { self.resizeRetryAfter[id] = Date().addingTimeInterval(5) }
 			self.refresh(id)
 		}
@@ -708,7 +708,7 @@ private final class FrameWriter: @unchecked Sendable {
 
 	func measureResize(
 		pid: pid_t, check: ResizeCheck,
-		completion: @escaping @MainActor @Sendable (WindowResizeAxes?) -> Void
+		completion: @escaping @MainActor @Sendable (WindowResizeAxes?, CGSize?) -> Void
 	) {
 		lock.lock()
 		let queue = queues[pid] ?? DispatchQueue(label: "kumiko.frames.\(pid)", qos: .userInteractive)
@@ -718,14 +718,16 @@ private final class FrameWriter: @unchecked Sendable {
 		queue.async {
 			let element = check.element
 			let clicks = CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown)
+			let keys = CGEventSource.counterForEventType(.combinedSessionState, eventType: .keyDown)
 			func userIntervened() -> Bool {
 				CGEventSource.buttonState(.combinedSessionState, button: .left)
 					|| CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown) != clicks
+					|| CGEventSource.counterForEventType(.combinedSessionState, eventType: .keyDown) != keys
 			}
 			guard !check.isCancelled, !CGEventSource.buttonState(.combinedSessionState, button: .left),
 			      let original = AX.frame(element)
 			else {
-				DispatchQueue.main.async { completion(nil) }
+				DispatchQueue.main.async { completion(nil, nil) }
 				return
 			}
 			var lastProbeFrame = original
@@ -753,7 +755,7 @@ private final class FrameWriter: @unchecked Sendable {
 			)
 			if canRestore() { AX.setFrame(element, original) }
 			AXUIElementSetMessagingTimeout(element, 1)
-			DispatchQueue.main.async { completion(axes) }
+			DispatchQueue.main.async { completion(axes, original.size) }
 		}
 	}
 

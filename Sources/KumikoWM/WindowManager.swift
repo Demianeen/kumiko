@@ -57,7 +57,7 @@ public final class WindowManager {
 	private var observers: [(NotificationCenter, any NSObjectProtocol)] = []
 	private let desktopClicks = DesktopClicks()
 
-	private struct EligibilityKey: Equatable {
+	struct EligibilityKey: Equatable {
 		let isManaged: Bool
 		let isMinimized: Bool
 		let isHidden: Bool
@@ -65,8 +65,9 @@ public final class WindowManager {
 		let isBackgroundTab: Bool
 		let isResizePending: Bool
 		let isResizable: Bool
+		let canTile: Bool
 
-		init(_ info: WindowInfo) {
+		init(_ info: WindowInfo, tiling: WindowTilingPolicy) {
 			isManaged = info.isManaged
 			isMinimized = info.isMinimized
 			isHidden = info.isHidden
@@ -74,6 +75,7 @@ public final class WindowManager {
 			isBackgroundTab = info.isBackgroundTab
 			isResizePending = info.isResizePending
 			isResizable = info.isResizable
+			canTile = tiling.canTile(info)
 		}
 	}
 
@@ -245,7 +247,7 @@ public final class WindowManager {
 		case .windowCreated:
 			scheduleSync()
 		case let .windowChanged(info):
-			if known[info.id] != EligibilityKey(info) {
+			if known[info.id] != EligibilityKey(info, tiling: WindowTilingPolicy(config.wm)) {
 				scheduleSync()
 			} else if !WindowServer.isAvailable {
 				// Without the WindowServer's events a drag is only seen through AX, late.
@@ -342,7 +344,7 @@ public final class WindowManager {
 		updateWorkspaces(displays)
 
 		for info in tracker.windows.values {
-			known[info.id] = EligibilityKey(info)
+			known[info.id] = EligibilityKey(info, tiling: WindowTilingPolicy(config.wm))
 		}
 
 		for id in assignment.keys where tracker.windows[id] == nil {
