@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3](https://github.com/aimuzov/kumiko/compare/v0.5.2...v0.5.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* **wm:** float windows with a fixed axis and remove Steam workarounds ([d57faee](https://github.com/aimuzov/kumiko/commit/d57faeeeadb2f70bb0ede5dc6f9b1c70794271a4))
+* **wm:** keep fixed-axis windows floating and remove Steam workarounds ([7428a01](https://github.com/aimuzov/kumiko/commit/7428a01ff9b8df4ee31943b26dd86b9a0afe61f6))
+* **wm:** refresh stale tiling eligibility without losing probe state ([c603418](https://github.com/aimuzov/kumiko/commit/c6034181fc5071680478c1ccec3af30785153595))
+* **wm:** refresh stale tiling eligibility without losing probe state ([e41da61](https://github.com/aimuzov/kumiko/commit/e41da615e47b75b599459439941931cdcb90d458))
+
 ## [0.5.2](https://github.com/aimuzov/kumiko/compare/v0.5.1...v0.5.2) (2026-11-09)
 
 
