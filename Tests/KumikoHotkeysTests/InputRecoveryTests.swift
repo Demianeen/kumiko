@@ -73,4 +73,36 @@ struct InputRecoveryTests {
 		await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
 		#expect(modes == ["default"])
 	}
+
+	@Test func aFailedCommandCannotContinueItsChainAfterReset() async throws {
+		var commands: [[String]] = []
+		var hotkeys: Hotkeys!
+		var config = try config()
+		config.bindings = [try KeyCombo.parse("alt - 1"): HotkeyAction(run: "stop || next")]
+		hotkeys = Hotkeys(bus: EventBus(), config: config, run: { command in
+			commands.append(command)
+			if command == ["stop"] {
+				hotkeys.stop()
+				return .failure("interrupted")
+			}
+			return .success()
+		})
+		defer { hotkeys = nil }
+		_ = hotkeys.handle(.keyDown, try event(0x12, flags: .maskAlternate))
+		await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+		#expect(commands == [["stop"]])
+	}
+
+	@Test func everyEffectChecksItsInputSession() throws {
+		var commands: [[String]] = []
+		var hotkeys: Hotkeys!
+		hotkeys = Hotkeys(bus: EventBus(), config: try config(), run: { command in
+			commands.append(command)
+			if command == ["stop"] { hotkeys.stop() }
+			return .success()
+		})
+		defer { hotkeys = nil }
+		hotkeys.apply([.run("stop"), .run("next")], generation: 0)
+		#expect(commands == [["stop"]])
+	}
 }

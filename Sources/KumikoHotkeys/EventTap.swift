@@ -248,7 +248,7 @@ public final class Hotkeys {
 		DispatchQueue.main.async { [weak self] in
 			MainActor.assumeIsolated {
 				guard let self, self.inputGeneration == generation else { return }
-				self.apply(effects)
+				self.apply(effects, generation: generation)
 			}
 		}
 	}
@@ -278,18 +278,21 @@ public final class Hotkeys {
 		}
 	}
 
-	private func apply(_ effects: [Effect]) {
+	func apply(_ effects: [Effect], generation: UInt64? = nil) {
 		for effect in effects {
+			if let generation, generation != inputGeneration { return }
 			switch effect {
 			case let .run(command):
-				runChain(command)
+				runChain(command, generation: generation)
 			case let .shell(command):
 				Self.shell(command, environment: [:])
 			case let .modeChanged(mode):
 				guard mode == engine.mode else { continue }
 				refreshSecureHotkeys()
 				guard mode == engine.mode else { continue }
+				if let generation, generation != inputGeneration { return }
 				bus.publish(.hotkeyModeChanged(mode))
+				if let generation, generation != inputGeneration { return }
 				if let hook = config.onModeChange {
 					Self.shell(hook, environment: ["KUMIKO_MODE": mode])
 				}
@@ -309,8 +312,9 @@ public final class Hotkeys {
 	}
 
 	/// `a || b`: runs b only when a fails, the way skhd bindings chain yabai commands.
-	private func runChain(_ chain: String) {
+	private func runChain(_ chain: String, generation: UInt64? = nil) {
 		for command in chain.components(separatedBy: "||") {
+			if let generation, generation != inputGeneration { return }
 			let words = Self.words(command)
 			guard !words.isEmpty else { continue }
 			if run(words).ok { return }
