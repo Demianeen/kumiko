@@ -75,7 +75,8 @@ struct RecommendedSettingsTests {
 			"Steam", "iPhone Mirroring", "Notes", "Ghostty",
 		]).text)
 
-		#expect(config.wm.rules == [WindowRule(app: "Steam", manage: true)])
+		#expect(config.wm.rules.isEmpty)
+		#expect(config.workspaces[6].stack.isEmpty)
 		#expect(config.borders.blacklist == ["iPhone Mirroring"])
 		#expect(config.vim.blacklist == ["Ghostty", "Notes"])
 		#expect(config.hotkeys.blacklist == ["loginwindow", "screensaver"])
@@ -110,7 +111,7 @@ struct RecommendedSettingsTests {
 		let placed = config.workspaces.flatMap(\.appRows)
 
 		#expect(Set(placed) == all)
-		#expect(config.wm.rules.count == 3)
+		#expect(config.wm.rules.count == 2)
 		#expect(config.borders.color?.hex == Config.Borders.ownColor.hex)
 		#expect(config.wm.shadows == false)
 		#expect(config.wm.keepOnScreen)

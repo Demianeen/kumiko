@@ -120,8 +120,8 @@ struct RulesPage: View {
 						.labelsHidden()
 				}
 				Row(
-					title: "Float windows that cannot be resized",
-					detail: "A window of one size fits no layout. Most settings windows are such.",
+					title: "Float windows with a fixed width or height",
+					detail: "Windows that cannot change width or height stay outside the layout.",
 					last: true,
 					reset: model.reset(\.wm.floatFixedSize, "wm", "float_fixed_size")
 				) {
@@ -363,6 +363,8 @@ private struct AppRuleDetail: View {
 				}
 			}
 
+			TilingWarning(reasons: WindowTilingPolicy(model.config.wm).warnings(forApp: app.name, windows: model.openWindows))
+
 			Card(title: "Except these windows") {
 				ForEach(app.exceptions, id: \.self) { title in
 					Row(title: title) {
@@ -486,6 +488,8 @@ private struct PatternDetail: View {
 					))
 				}
 			}
+
+			TilingWarning(reasons: WindowTilingPolicy(model.config.wm).warnings(for: rule, windows: model.openWindows))
 
 			HStack {
 				Spacer()

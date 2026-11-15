@@ -10,6 +10,8 @@ public final class WindowTracker {
 	public private(set) var focusedWindowID: UInt32?
 	public private(set) var isRunning = false
 
+	public func isMeasuringResize(_ id: UInt32) -> Bool { resizeChecks[id] != nil }
+
 	private let bus: EventBus
 	private var config: Config.WM
 	private var rules: Rules
@@ -23,6 +25,9 @@ public final class WindowTracker {
 	private var rescanTimer: Timer?
 	private var pendingRefreshes: Set<UInt32> = []
 	private let writer = FrameWriter()
+	private var resizeStates: [UInt32: WindowResizeState] = [:]
+	private var resizeChecks: [UInt32: ResizeCheck] = [:]
+	private var resizeRetryAfter: [UInt32: Date] = [:]
 	/// kumiko's own windows, the settings. They go through AppKit, not AX: AX asked of kumiko's
 	/// own process from its main thread waits for that same thread to answer.
 	private var own: [UInt32: NSWindow] = [:]
@@ -82,6 +87,9 @@ public final class WindowTracker {
 		for observer in apps.values {
 			observer.rescan()
 			updateTabs(of: observer)
+		}
+		for id in Array(windows.keys) where own[id] == nil {
+			refresh(id)
 		}
 	}
 
@@ -157,7 +165,7 @@ public final class WindowTracker {
 
 		on(NSWorkspace.didActivateApplicationNotification) { [weak self] app in
 			if app.processIdentifier == getpid(), self?.focusOwnWindow() == true { return }
-			self?.apps.values.filter { $0.app == app || $0.owner == app }.forEach { $0.rescan() }
+			self?.apps[app.processIdentifier]?.rescan()
 			self?.updateFocus()
 		}
 
@@ -168,53 +176,18 @@ public final class WindowTracker {
 		workspaceObservers.append(token)
 	}
 
-	/// Only regular apps — the ones with a Dock icon — have windows worth arranging, together with
-	/// the helpers they draw them in. Agents are left alone, and kumiko's own windows come through
-	/// `track(own:)`.
 	private func add(_ app: NSRunningApplication) {
 		let pid = app.processIdentifier
-		guard pid != ProcessInfo.processInfo.processIdentifier, apps[pid] == nil else { return }
+		guard
+			app.activationPolicy == .regular,
+			!Self.isAgent(app),
+			pid != ProcessInfo.processInfo.processIdentifier,
+			apps[pid] == nil
+		else { return }
 
-		let owner: NSRunningApplication
-		if Self.isRegular(app) {
-			owner = app
-		} else if let host = Self.host(of: app) {
-			owner = host
-		} else {
-			return
-		}
-
-		let observer = AppObserver(app: app, owner: owner, tracker: self)
+		let observer = AppObserver(app: app, tracker: self)
 		apps[pid] = observer
 		observer.start()
-	}
-
-	/// The app a process's windows go by: the process itself, or for a helper, the app that launched it.
-	public func owner(of pid: pid_t) -> pid_t {
-		apps[pid]?.owner.processIdentifier ?? pid
-	}
-
-	private static func isRegular(_ app: NSRunningApplication) -> Bool {
-		app.activationPolicy == .regular && !isAgent(app)
-	}
-
-	/// The regular app that launched a helper without a Dock icon of its own. Steam draws every
-	/// window in Steam Helper, an agent, and keeps a 1×1 window in Steam itself.
-	private static func host(of app: NSRunningApplication) -> NSRunningApplication? {
-		guard
-			let parent = parentPID(of: app.processIdentifier), parent > 1,
-			parent != ProcessInfo.processInfo.processIdentifier,
-			let host = NSRunningApplication(processIdentifier: parent), isRegular(host)
-		else { return nil }
-		return host
-	}
-
-	private static func parentPID(of pid: pid_t) -> pid_t? {
-		var info = kinfo_proc()
-		var size = MemoryLayout<kinfo_proc>.stride
-		var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-		guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
-		return info.kp_eproc.e_ppid
 	}
 
 	/// Built as an agent, like Raycast: a Dock icon only while its settings are open.
@@ -236,10 +209,10 @@ public final class WindowTracker {
 	}
 
 	private func refreshWindows(of app: NSRunningApplication) {
-		for observer in apps.values where observer.app == app || observer.owner == app {
-			for id in observer.windows.keys {
-				refresh(id)
-			}
+		guard let observer = apps[app.processIdentifier] else { return }
+
+		for id in observer.windows.keys {
+			refresh(id)
 		}
 	}
 
@@ -265,7 +238,7 @@ public final class WindowTracker {
 		case kAXFocusedWindowChangedNotification, kAXFocusedUIElementChangedNotification:
 			if name == kAXFocusedWindowChangedNotification { updateTabs(of: observer) }
 			// Background apps move their own focus around too; only the frontmost app's counts.
-			if observer.app.isActive || observer.owner.isActive { updateFocus() }
+			if observer.app.isActive { updateFocus() }
 		case kAXMainWindowChangedNotification:
 			updateTabs(of: observer)
 		case kAXUIElementDestroyedNotification:
@@ -274,7 +247,7 @@ public final class WindowTracker {
 				untrack(id)
 			}
 		case kAXWindowMovedNotification, kAXWindowResizedNotification:
-			if let id = observer.id(of: element) { scheduleRefresh(id) }
+			if let id = observer.id(of: element), resizeChecks[id] == nil { scheduleRefresh(id) }
 		default:
 			if let id = observer.id(of: element) { refresh(id) }
 		}
@@ -306,6 +279,7 @@ public final class WindowTracker {
 	/// Rereads a window and reports it if anything changed.
 	func refresh(_ id: UInt32) {
 		pendingRefreshes.remove(id)
+		guard resizeChecks[id] == nil else { return }
 		guard
 			let old = windows[id],
 			let observer = apps[old.pid],
@@ -348,6 +322,9 @@ public final class WindowTracker {
 
 	private func untrack(_ id: UInt32) {
 		guard let info = windows.removeValue(forKey: id) else { return }
+		resizeStates[id] = nil
+		resizeChecks.removeValue(forKey: id)?.cancel()
+		resizeRetryAfter[id] = nil
 
 		apps[info.pid]?.forget(id)
 		bus.publish(.windowDestroyed(id: id))
@@ -367,39 +344,63 @@ public final class WindowTracker {
 	) -> WindowInfo? {
 		guard let frame = AX.frame(element) else { return nil }
 
-		let app = observer.owner.localizedName ?? ""
+		let app = observer.app.localizedName ?? ""
 		let title = AX.string(element, kAXTitleAttribute) ?? ""
 		let identifier = AX.string(element, kAXIdentifierAttribute)
-		// Hiding Steam takes Steam Helper's windows with it, though the helper never says it is hidden.
-		let isHidden = observer.app.isHidden || observer.owner.isHidden
+		let isHidden = observer.app.isHidden
 		let subrole = isHidden && previous != nil
 			? previous?.subrole
 			: AX.string(element, kAXSubroleAttribute)
-		// The same distrust of a hidden app; and a window that does not answer is taken as resizable,
-		// so a busy app does not see its windows leave the layout.
-		let isResizable = isHidden && previous != nil
-			? previous?.isResizable ?? true
-			: AX.isSettable(element, kAXSizeAttribute) ?? true
+		// Hiding an app must not replace a measured axis with a missing AX answer.
+		let axResizable = isHidden ? nil : AX.isSettable(element, kAXSizeAttribute)
+		var state = resizeStates[id] ?? WindowResizeState()
+		state.update(settable: axResizable, title: title, identifier: identifier, previous: previous?.frame.size, size: frame.size)
+		resizeStates[id] = state
+		let axes = state.axes
+		let isResizable = axes?.isResizable ?? axResizable ?? previous?.isResizable ?? true
+		let isMinimized = AX.bool(element, kAXMinimizedAttribute) ?? false
+		let isFullscreen = AX.bool(element, "AXFullScreen") ?? false
+		let isResizePending = config.floatFixedSize && axes == nil && subrole == "AXStandardWindow"
+		if (isResizePending || state.needsCheck) && !isHidden && !isMinimized && !isFullscreen
+			&& NSEvent.pressedMouseButtons == 0 && Display.all().contains(where: { $0.visibleFrame.intersects(frame) })
+		{
+			checkResize(element, id: id, pid: observer.pid)
+		}
 
 		return WindowInfo(
 			id: id,
 			pid: observer.pid,
 			app: app,
-			bundleID: observer.owner.bundleIdentifier,
+			bundleID: observer.app.bundleIdentifier,
 			title: title,
 			subrole: subrole,
 			frame: frame,
-			isMinimized: AX.bool(element, kAXMinimizedAttribute) ?? false,
+			isMinimized: isMinimized,
 			isHidden: isHidden,
-			isFullscreen: AX.bool(element, "AXFullScreen") ?? false,
-			isManaged: rules.isManaged(
+			isFullscreen: isFullscreen,
+			isManaged: !isResizePending && rules.isManaged(
 				app: app, title: title, identifier: identifier, isResizable: isResizable, subrole: subrole
 			),
 			identifier: identifier,
 			isResizable: isResizable,
 			// A tab goes behind or comes in front only as `updateTabs` sees it.
-			isBackgroundTab: previous?.isBackgroundTab ?? false
+			isBackgroundTab: previous?.isBackgroundTab ?? false,
+			resizeAxes: axes,
+			isResizePending: isResizePending
 		)
+	}
+
+	private func checkResize(_ element: AXUIElement, id: UInt32, pid: pid_t) {
+		guard resizeChecks[id] == nil, Date() >= (resizeRetryAfter[id] ?? .distantPast) else { return }
+		let check = ResizeCheck(element)
+		resizeChecks[id] = check
+		writer.measureResize(pid: pid, check: check) { [weak self] axes in
+			guard let self, self.isRunning, self.resizeChecks[id] === check, self.windows[id] != nil else { return }
+			self.resizeChecks[id] = nil
+			self.resizeStates[id, default: WindowResizeState()].record(axes)
+			if axes == nil { self.resizeRetryAfter[id] = Date().addingTimeInterval(5) }
+			self.refresh(id)
+		}
 	}
 
 	// MARK: - Own windows
@@ -458,7 +459,12 @@ public final class WindowTracker {
 	private func describe(own window: NSWindow, id: UInt32) -> WindowInfo {
 		let app = NSRunningApplication.current.localizedName ?? "Kumiko"
 		let subrole = kAXStandardWindowSubrole as String
-		let isResizable = window.styleMask.contains(.resizable)
+		let style = window.styleMask.contains(.resizable)
+		let axes = WindowResizeAxes(
+			width: style && window.maxSize.width > window.minSize.width && window.contentMaxSize.width > window.contentMinSize.width,
+			height: style && window.maxSize.height > window.minSize.height && window.contentMaxSize.height > window.contentMinSize.height
+		)
+		let isResizable = axes.isResizable
 
 		return WindowInfo(
 			id: id,
@@ -474,7 +480,8 @@ public final class WindowTracker {
 			isManaged: rules.isManaged(
 				app: app, title: window.title, isResizable: isResizable, subrole: subrole, fallback: false
 			),
-			isResizable: isResizable
+			isResizable: isResizable,
+			resizeAxes: axes
 		)
 	}
 
@@ -504,7 +511,12 @@ public final class WindowTracker {
 			return
 		}
 		guard let (element, _) = elements(of: id), let pid = windows[id]?.pid else { return }
-		writer.setFrame(element, id: id, pid: pid, frame: frame)
+		writer.setFrame(element, id: id, pid: pid, frame: frame) { [weak self] requested, actual in
+			guard let self, self.windows[id] != nil, self.resizeChecks[id] == nil,
+			      self.resizeStates[id]?.rejected(requested, actual: actual) == true
+			else { return }
+			self.refresh(id)
+		}
 	}
 
 	/// Waits until every frame asked for is applied; for quitting, when nothing may be left behind.
@@ -560,7 +572,8 @@ public final class WindowTracker {
 
 		guard
 			let frontmost = NSWorkspace.shared.frontmostApplication,
-			let (window, observer) = focusedWindow(of: frontmost.processIdentifier),
+			let observer = apps[frontmost.processIdentifier],
+			let window = AX.element(observer.element, kAXFocusedWindowAttribute),
 			let id = AX.windowID(window)
 		else {
 			setFocus(nil)
@@ -573,18 +586,6 @@ public final class WindowTracker {
 		}
 
 		setFocus(windows[id] == nil ? nil : id)
-	}
-
-	/// An app that draws its windows in a helper, as Steam does, asks the helper first: its own
-	/// focused window is a 1×1 stand-in. A helper brought forward by kumiko is frontmost itself.
-	private func focusedWindow(of pid: pid_t) -> (AXUIElement, AppObserver)? {
-		let observers = apps.values
-			.filter { $0.pid == pid || $0.owner.processIdentifier == pid }
-			.sorted { $0.pid != pid && $1.pid == pid }
-		for observer in observers {
-			if let window = AX.element(observer.element, kAXFocusedWindowAttribute) { return (window, observer) }
-		}
-		return nil
 	}
 
 	static let finder = "com.apple.finder"
@@ -702,13 +703,67 @@ public final class WindowTracker {
 /// Applies window frames on a serial queue per app, keeping only the newest frame per window.
 private final class FrameWriter: @unchecked Sendable {
 	private let lock = NSLock()
-	private var pending: [UInt32: (element: AXUIElement, frame: CGRect)] = [:]
+	private var pending: [UInt32: (element: AXUIElement, frame: CGRect, resized: @MainActor @Sendable (CGSize, CGSize) -> Void)] = [:]
 	private var queues: [pid_t: DispatchQueue] = [:]
 
-	func setFrame(_ element: AXUIElement, id: UInt32, pid: pid_t, frame: CGRect) {
+	func measureResize(
+		pid: pid_t, check: ResizeCheck,
+		completion: @escaping @MainActor @Sendable (WindowResizeAxes?) -> Void
+	) {
+		lock.lock()
+		let queue = queues[pid] ?? DispatchQueue(label: "kumiko.frames.\(pid)", qos: .userInteractive)
+		queues[pid] = queue
+		lock.unlock()
+
+		queue.async {
+			let element = check.element
+			let clicks = CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown)
+			func userIntervened() -> Bool {
+				CGEventSource.buttonState(.combinedSessionState, button: .left)
+					|| CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown) != clicks
+			}
+			guard !check.isCancelled, !CGEventSource.buttonState(.combinedSessionState, button: .left),
+			      let original = AX.frame(element)
+			else {
+				DispatchQueue.main.async { completion(nil) }
+				return
+			}
+			var lastProbeFrame = original
+			func canRestore() -> Bool {
+				!userIntervened() || AX.frame(element) == lastProbeFrame
+			}
+			AXUIElementSetMessagingTimeout(element, 0.2)
+			let axes = WindowResizeProbe.measure(
+				read: { AX.frame(element)?.size },
+				write: { size in
+					guard !userIntervened() || (size == original.size && canRestore()) else { return false }
+					lastProbeFrame.size = size
+					guard AX.setSize(element, size) else { return false }
+					for _ in 0..<5 {
+						guard let frame = AX.frame(element) else { return false }
+						if !userIntervened() { lastProbeFrame = frame }
+						let actual = frame.size
+						if abs(actual.width - size.width) < 1 && abs(actual.height - size.height) < 1 { return true }
+						Thread.sleep(forTimeInterval: 0.01)
+					}
+					return true
+				},
+				cancelled: { check.isCancelled || userIntervened() },
+				restoreAllowed: { canRestore() }
+			)
+			if canRestore() { AX.setFrame(element, original) }
+			AXUIElementSetMessagingTimeout(element, 1)
+			DispatchQueue.main.async { completion(axes) }
+		}
+	}
+
+	func setFrame(
+		_ element: AXUIElement, id: UInt32, pid: pid_t, frame: CGRect,
+		resized: @escaping @MainActor @Sendable (CGSize, CGSize) -> Void
+	) {
 		lock.lock()
 		let isQueued = pending[id] != nil
-		pending[id] = (element, frame)
+		pending[id] = (element, frame, resized)
 		let queue = queues[pid] ?? DispatchQueue(label: "kumiko.frames.\(pid)", qos: .userInteractive)
 		queues[pid] = queue
 		lock.unlock()
@@ -721,7 +776,14 @@ private final class FrameWriter: @unchecked Sendable {
 			let next = pending.removeValue(forKey: id)
 			lock.unlock()
 
-			if let next { AX.setFrame(next.element, next.frame) }
+			if let next {
+				AX.setFrame(next.element, next.frame)
+				if let actual = AX.frame(next.element)?.size {
+					let requested = next.frame.size
+					let resized = next.resized
+					DispatchQueue.main.async { resized(requested, actual) }
+				}
+			}
 		}
 	}
 
@@ -733,5 +795,27 @@ private final class FrameWriter: @unchecked Sendable {
 		for queue in all {
 			queue.sync {}
 		}
+	}
+}
+
+private final class ResizeCheck: @unchecked Sendable {
+	let element: AXUIElement
+	private let lock = NSLock()
+	private var cancelled = false
+
+	init(_ element: AXUIElement) {
+		self.element = element
+	}
+
+	var isCancelled: Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return cancelled
+	}
+
+	func cancel() {
+		lock.lock()
+		cancelled = true
+		lock.unlock()
 	}
 }

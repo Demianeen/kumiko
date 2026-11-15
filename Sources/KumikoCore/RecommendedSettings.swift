@@ -31,8 +31,7 @@ public enum RecommendedSettings {
 			apps: [
 				"App Store", "System Settings", "MacPass", "KeePassXC", "Kumiko", "Steam", "OrbStack", "AppCleaner",
 				"Pearcleaner", "logioptionsplus",
-			],
-			stack: ["Steam"]
+			]
 		),
 		.init(name: "Agenda", display: "external", apps: ["Things", "Calendar"], stack: ["Things", "Calendar", "Mail"]),
 		.init(name: "Misc", display: "external", isDefault: true),
@@ -45,7 +44,7 @@ public enum RecommendedSettings {
 	]
 
 	/// `[[wm.rule]]` by app: these apps' windows are tiled, or left alone, whatever else says.
-	static let rules: [(app: String, manage: Bool)] = [("Calendar", true), ("Mail", true), ("Steam", true)]
+	static let rules: [(app: String, manage: Bool)] = [("Calendar", true), ("Mail", true)]
 
 	/// Processes that are no app in a folder of apps, but whose windows the hotkeys keep away from.
 	static let hotkeysSystemBlacklist = ["loginwindow", "screensaver"]

@@ -100,8 +100,7 @@ public enum WindowServer {
 		return tags & (1 << 3) != 0
 	}
 
-	/// The corner radius the window is drawn with, as the WindowServer knows it: 0 for a window with
-	/// square corners, like Steam's.
+	/// The corner radius the window is drawn with, as the WindowServer knows it.
 	public static func cornerRadius(of id: UInt32) -> Double? {
 		guard let functions, let radii = functions.radii else { return nil }
 
@@ -111,7 +110,7 @@ public enum WindowServer {
 			let iterator = functions.copyWindows(query)?.takeRetainedValue(),
 			functions.advance(iterator),
 			let values = radii(iterator)?.takeRetainedValue() as? [NSNumber],
-			let radius = values.first?.doubleValue
+			let radius = values.first?.doubleValue, radius > 0
 		else { return nil }
 
 		return radius
