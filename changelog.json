@@ -1,5 +1,26 @@
 [
 	{
+		"version": "0.5.3",
+		"date": "2026-11-15",
+		"title": {
+			"ru": "Окна с фиксированным размером не встают плиткой",
+			"en": "Fixed-width windows stay floating"
+		},
+		"icon": "PanelsTopLeft",
+		"items": {
+			"ru": [
+				"Если у окна нельзя менять ширину или высоту, оно остаётся плавающим. Это учитывается и при ручном включении плитки.",
+				"В правилах окон и настройках рабочих столов появляется предупреждение, если открытое окно нельзя разместить плиткой. Перенос на выбранный рабочий стол продолжает работать.",
+				"Убраны обходы для Steam и Steam Helper. Окна вспомогательных процессов больше не размещаются плиткой от имени основного приложения."
+			],
+			"en": [
+				"Windows with a fixed width or height stay floating, even when you try to tile them manually.",
+				"Window Rules and Workspaces warn you when an open window cannot be tiled. You can still move it to its assigned workspace.",
+				"Removed the Steam and Steam Helper workarounds. Helper windows are no longer tiled under their parent app's name."
+			]
+		}
+	},
+	{
 		"version": "0.5.2",
 		"date": "2026-11-09",
 		"title": {
@@ -8,12 +29,8 @@
 		},
 		"icon": "Layers",
 		"items": {
-			"ru": [
-				"Если ты выключил тени окон, Kumiko снова уберёт тень, когда macOS её вернёт."
-			],
-			"en": [
-				"If you turn window shadows off, Kumiko removes them again whenever macOS brings them back."
-			]
+			"ru": ["Если ты выключил тени окон, Kumiko снова уберёт тень, когда macOS её вернёт."],
+			"en": ["If you turn window shadows off, Kumiko removes them again whenever macOS brings them back."]
 		}
 	},
 	{
@@ -25,12 +42,8 @@
 		},
 		"icon": "Cpu",
 		"items": {
-			"ru": [
-				"Один архив подходит для Mac с Intel и Apple Silicon."
-			],
-			"en": [
-				"The same download works on Intel and Apple Silicon Macs."
-			]
+			"ru": ["Один архив подходит для Mac с Intel и Apple Silicon."],
+			"en": ["The same download works on Intel and Apple Silicon Macs."]
 		}
 	},
 	{
