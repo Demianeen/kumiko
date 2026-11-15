@@ -37,6 +37,12 @@ enum AX {
 		return settable.boolValue
 	}
 
+	static func setSize(_ element: AXUIElement, _ requested: CGSize) -> Bool {
+		var size = requested
+		guard let value = AXValueCreate(.cgSize, &size) else { return false }
+		return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) == .success
+	}
+
 	static func element(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
 		guard let value = value(element, attribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
 		return (value as! AXUIElement)

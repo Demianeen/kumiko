@@ -957,54 +957,62 @@ private struct AppRow: View {
 		"A pattern only chooses where windows open and their order: the other settings match exact app names."
 
 	var body: some View {
-		HStack(spacing: AppColumn.spacing) {
-			if movable {
-				handle
-					.disabled(workspace.layout != .bsp)
-					.opacity(workspace.layout != .bsp ? 0.4 : 1)
-			} else {
-				Spacer().frame(width: AppColumn.handle)
-			}
-
-			HStack(spacing: 10) {
-				if let icon = AppIcon.image(for: app) {
-					Image(nsImage: icon).resizable().frame(width: AppColumn.icon, height: AppColumn.icon)
+		VStack(alignment: .leading, spacing: 8) {
+			HStack(spacing: AppColumn.spacing) {
+				if movable {
+					handle
+						.disabled(workspace.layout != .bsp)
+						.opacity(workspace.layout != .bsp ? 0.4 : 1)
 				} else {
-					Spacer().frame(width: AppColumn.icon)
+					Spacer().frame(width: AppColumn.handle)
 				}
-				VStack(alignment: .leading, spacing: 2) {
-					Text(app)
-						.lineLimit(1)
-						.truncationMode(.tail)
-					ForEach(notes, id: \.self) { note in
-						Text(note)
-							.font(.caption)
-							.foregroundStyle(.secondary)
+
+				HStack(spacing: 10) {
+					if let icon = AppIcon.image(for: app) {
+						Image(nsImage: icon).resizable().frame(width: AppColumn.icon, height: AppColumn.icon)
+					} else {
+						Spacer().frame(width: AppColumn.icon)
+					}
+					VStack(alignment: .leading, spacing: 2) {
+						Text(app)
 							.lineLimit(1)
 							.truncationMode(.tail)
-							.help(note)
+						ForEach(notes, id: \.self) { note in
+							Text(note)
+								.font(.caption)
+								.foregroundStyle(.secondary)
+								.lineLimit(1)
+								.truncationMode(.tail)
+								.help(note)
+						}
 					}
 				}
-			}
-			.frame(maxWidth: .infinity, alignment: .leading)
+				.frame(maxWidth: .infinity, alignment: .leading)
 
-			SizeControl(model: model, workspace: workspace, app: app)
-				.frame(width: AppColumn.size)
-				.disabled(workspace.isPattern(app) || workspace.layout != .bsp)
-				.help(workspace.isPattern(app) ? Self.patternHelp : SizeControl.help)
+				SizeControl(model: model, workspace: workspace, app: app)
+					.frame(width: AppColumn.size)
+					.disabled(workspace.isPattern(app) || workspace.layout != .bsp)
+					.help(workspace.isPattern(app) ? Self.patternHelp : SizeControl.help)
 
-			// Always there: one shown on hover only was found by chance. The red circle is how macOS
-			// marks taking a row out of a list; a bordered button this small flattens into a pill.
-			Button { model.removeApp(app, from: workspace.name) } label: {
-				Image(systemName: "minus.circle.fill")
-					.symbolRenderingMode(.palette)
-					.foregroundStyle(.white, .red)
-					.font(.system(size: 14))
-					.accessibilityLabel("Remove \(app)")
+				// Always there: one shown on hover only was found by chance. The red circle is how macOS
+				// marks taking a row out of a list; a bordered button this small flattens into a pill.
+				Button { model.removeApp(app, from: workspace.name) } label: {
+					Image(systemName: "minus.circle.fill")
+						.symbolRenderingMode(.palette)
+						.foregroundStyle(.white, .red)
+						.font(.system(size: 14))
+						.accessibilityLabel("Remove \(app)")
+				}
+				.buttonStyle(.borderless)
+				.help("Take \(app) out of this workspace")
+				.frame(width: AppColumn.remove)
 			}
-			.buttonStyle(.borderless)
-			.help("Take \(app) out of this workspace")
-			.frame(width: AppColumn.remove)
+			TilingWarning(
+				reasons: WindowTilingPolicy(model.config.wm).workspaceWarnings(
+					forApp: app, isPattern: workspace.isPattern(app), windows: model.openWindows
+				),
+				workspace: true
+			)
 		}
 		.padding(.vertical, 8)
 		.contentShape(Rectangle())
@@ -1065,14 +1073,7 @@ private struct AppRow: View {
 		let opens = workspace.listsInApps(app)
 			? earlierWorkspace.map { "Opens in \($0), which comes first" }
 			: "Doesn't open here"
-		return [opens, floats ? "Floats: no window rule tiles it" : nil].compactMap(\.self)
-	}
-
-	/// The size and the order mean nothing to a window that is not tiled. Only while the rules
-	/// are what decides: with the window manager or its rules off, the row has nothing to add.
-	private var floats: Bool {
-		let wm = model.config.wm
-		return wm.enabled && wm.useRules && !workspace.isPattern(app) && !wm.tiles(app)
+		return [opens].compactMap(\.self)
 	}
 
 	/// The first workspace before this one whose `apps` also match the app, and so wins it.

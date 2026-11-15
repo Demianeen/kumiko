@@ -63,6 +63,8 @@ public final class WindowManager {
 		let isHidden: Bool
 		let isFullscreen: Bool
 		let isBackgroundTab: Bool
+		let isResizePending: Bool
+		let isResizable: Bool
 
 		init(_ info: WindowInfo) {
 			isManaged = info.isManaged
@@ -70,6 +72,8 @@ public final class WindowManager {
 			isHidden = info.isHidden
 			isFullscreen = info.isFullscreen
 			isBackgroundTab = info.isBackgroundTab
+			isResizePending = info.isResizePending
+			isResizable = info.isResizable
 		}
 	}
 
@@ -249,6 +253,7 @@ public final class WindowManager {
 				noticeLooseMove(info.id)
 			}
 		case let .windowFrameChanged(id, frame):
+			guard !tracker.isMeasuringResize(id) else { return }
 			noticeUserFrameChange(id, frame)
 			noticeLooseMove(id)
 		case let .windowDestroyed(id):
@@ -346,7 +351,7 @@ public final class WindowManager {
 
 		// An app is done unhiding once none of its windows says hidden any more.
 		unhiding = unhiding.filter { pid in
-			tracker.windows.values.contains { $0.isHidden && ($0.pid == pid || tracker.owner(of: $0.pid) == pid) }
+			tracker.windows.values.contains { $0.isHidden && $0.pid == pid }
 		}
 
 		for info in tracker.sortedWindows where assignment[info.id] == nil {
@@ -521,7 +526,7 @@ public final class WindowManager {
 	private func isTiled(_ id: UInt32, in workspace: Workspace) -> Bool {
 		// A floating workspace tiles nothing, not even a window toggled into the layout by hand.
 		guard workspace.config.layout != .float, let info = tracker.windows[id], assignment[id] === workspace,
-		      !info.isBackgroundTab
+		      !info.isBackgroundTab, WindowTilingPolicy(config.wm).canTile(info)
 		else { return false }
 		// A toggle can bring in a window the rules skip, but never a dialog or a panel.
 		let wanted = tiledByUser[id].map { $0 && info.subrole == "AXStandardWindow" } ?? info.isManaged
@@ -530,8 +535,7 @@ public final class WindowManager {
 
 	/// Hidden by cmd-h, not by kumiko: a window of an app kumiko hid keeps its place in the layout.
 	private func isHiddenByUser(_ info: WindowInfo) -> Bool {
-		let pids = [info.pid, tracker.owner(of: info.pid)]
-		return info.isHidden && !pids.contains { hiddenApps.contains($0) || unhiding.contains($0) }
+		info.isHidden && !hiddenApps.contains(info.pid) && !unhiding.contains(info.pid)
 	}
 
 	/// Puts a window into its workspace's layout, then applies the workspace's layout rules.
@@ -644,10 +648,7 @@ public final class WindowManager {
 
 		for info in tracker.windows.values where !info.isMinimized && !info.isFullscreen && info.pid != kumiko {
 			let shown = assignment[info.id].map(isVisible) ?? true
-			// Hiding Steam hides Steam Helper's windows too, so a shown helper window keeps Steam shown.
-			for pid in Set([info.pid, tracker.owner(of: info.pid)]) {
-				result[pid] = (result[pid] ?? false) || shown
-			}
+			result[info.pid] = (result[info.pid] ?? false) || shown
 		}
 
 		return result
@@ -895,10 +896,7 @@ public final class WindowManager {
 	public func focus(app pid: pid_t, on name: String) -> Bool {
 		guard config.wm.enabled, let workspace = workspaces.first(where: { $0.name == name }) else { return false }
 
-		// A bar icon stands for the owner, Steam, whose windows are its helper's.
-		let candidates = windows(of: workspace).filter { id in
-			tracker.windows[id].map { tracker.owner(of: $0.pid) == pid } ?? false
-		}
+		let candidates = windows(of: workspace).filter { tracker.windows[$0]?.pid == pid }
 		let id = history.last(where: candidates.contains)
 			?? workspace.tree.visibleWindows.first(where: candidates.contains)
 			?? candidates.first { tracker.windows[$0]?.isMinimized == false }
@@ -1321,8 +1319,8 @@ public final class WindowManager {
 			return .failure("workspace \(workspace.name) floats every window")
 		}
 		guard assignment[id]?.tree.contains(id) == true else {
-			guard tracker.windows[id]?.subrole == "AXStandardWindow" else {
-				return .failure("only standard windows can join the layout")
+			guard let info = tracker.windows[id], WindowTilingPolicy(config.wm).canTile(info) else {
+				return .failure("this window cannot join the layout while its floating protection or size check applies")
 			}
 			tiledByUser[id] = true
 			sync()

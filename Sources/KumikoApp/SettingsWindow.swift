@@ -25,6 +25,7 @@ final class SettingsWindow {
 
 	init(app: AppDelegate) {
 		model = SettingsModel(configFile: app.paths.configFile, config: app.config, error: app.configError?.description, updates: app.updates)
+		model.openWindows = app.tracker.map { Array($0.windows.values) } ?? []
 		bringForward = { [weak app] in app?.tracker?.bringKumikoForward() }
 		tile = { [weak app] window in app?.tracker?.track(own: window) }
 		isTiled = { [weak app] window in
@@ -36,9 +37,14 @@ final class SettingsWindow {
 		paneObserver = model.$pane.sink { [weak self] pane in self?.fit(pane) }
 
 		app.bus.subscribe { [weak self, unowned app] event in
-			guard case .configReloaded = event else { return }
-			self?.model.update(app.config, error: app.configError?.description)
-			self?.matchShadows()
+			switch event {
+			case .configReloaded:
+				self?.model.update(app.config, error: app.configError?.description)
+				self?.matchShadows()
+			case .windowCreated, .windowChanged, .windowDestroyed:
+				self?.model.openWindows = app.tracker.map { Array($0.windows.values) } ?? []
+			default: break
+			}
 		}
 	}
 
@@ -169,6 +175,7 @@ final class SettingsModel: ObservableObject {
 	let updates: AppUpdater
 	@Published private(set) var config: Config
 	@Published private(set) var error: String?
+	@Published var openWindows: [WindowInfo] = []
 	/// Why the last change made here was not written.
 	@Published private(set) var writeError: String?
 	// In the model rather than in @State: the State macro needs a plugin only Xcode ships.

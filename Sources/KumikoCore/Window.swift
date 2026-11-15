@@ -12,8 +12,10 @@ public struct WindowInfo: Codable, Equatable, Sendable {
 	public var subrole: String?
 	/// What the app calls the window (`AXIdentifier`), there when it has no title too.
 	public var identifier: String?
-	/// False for a window of one size only, as settings windows mostly are: no layout can fit it.
+	/// Tiling needs both axes: a fixed width or height leaves gaps in the layout.
 	public var isResizable: Bool
+	public var resizeAxes: WindowResizeAxes?
+	public var isResizePending: Bool
 	public var frame: CGRect
 	public var isMinimized: Bool
 	/// The app is hidden (cmd-h), so the window is not on screen though it still exists.
@@ -28,10 +30,13 @@ public struct WindowInfo: Codable, Equatable, Sendable {
 	public init(
 		id: UInt32, pid: Int32, app: String, bundleID: String?, title: String, subrole: String?,
 		frame: CGRect, isMinimized: Bool, isHidden: Bool, isFullscreen: Bool, isManaged: Bool, identifier: String? = nil,
-		isResizable: Bool = true, isBackgroundTab: Bool = false
+		isResizable: Bool = true, isBackgroundTab: Bool = false, resizeAxes: WindowResizeAxes? = nil,
+		isResizePending: Bool = false
 	) {
 		self.identifier = identifier
 		self.isResizable = isResizable
+		self.resizeAxes = resizeAxes
+		self.isResizePending = isResizePending
 		self.isBackgroundTab = isBackgroundTab
 		self.id = id
 		self.pid = pid
@@ -44,5 +49,25 @@ public struct WindowInfo: Codable, Equatable, Sendable {
 		self.isHidden = isHidden
 		self.isFullscreen = isFullscreen
 		self.isManaged = isManaged
+	}
+
+	public init(from decoder: any Decoder) throws {
+		let values = try decoder.container(keyedBy: CodingKeys.self)
+		id = try values.decode(UInt32.self, forKey: .id)
+		pid = try values.decode(Int32.self, forKey: .pid)
+		app = try values.decode(String.self, forKey: .app)
+		bundleID = try values.decodeIfPresent(String.self, forKey: .bundleID)
+		title = try values.decode(String.self, forKey: .title)
+		subrole = try values.decodeIfPresent(String.self, forKey: .subrole)
+		identifier = try values.decodeIfPresent(String.self, forKey: .identifier)
+		isResizable = try values.decode(Bool.self, forKey: .isResizable)
+		resizeAxes = try values.decodeIfPresent(WindowResizeAxes.self, forKey: .resizeAxes)
+		isResizePending = try values.decodeIfPresent(Bool.self, forKey: .isResizePending) ?? false
+		frame = try values.decode(CGRect.self, forKey: .frame)
+		isMinimized = try values.decode(Bool.self, forKey: .isMinimized)
+		isHidden = try values.decode(Bool.self, forKey: .isHidden)
+		isFullscreen = try values.decode(Bool.self, forKey: .isFullscreen)
+		isManaged = try values.decode(Bool.self, forKey: .isManaged)
+		isBackgroundTab = try values.decode(Bool.self, forKey: .isBackgroundTab)
 	}
 }
