@@ -96,7 +96,7 @@ kumiko status
 | `kumiko status` | модули, права, путь к конфигу и последняя ошибка в нём |
 | `kumiko reload` | перечитывает конфиг; это происходит и само, когда файл меняется |
 | `kumiko settings [page]` | открывает окно настроек на `general`, `workspaces`, `rules`, `hotkeys`, `bar`, `borders`, `vim`… |
-| `kumiko query windows\|focused\|workspaces\|displays` | печатает состояние в JSON |
+| `kumiko query windows\|focused\|workspaces\|displays\|input` | печатает состояние в JSON |
 | `kumiko window focus\|warp\|move\|resize\|ratio\|float\|zoom\|stack\|unstack\|close …` | действие с окном в фокусе |
 | `kumiko workspace focus\|balance\|rotate\|mirror\|layout …` | действие с рабочим столом в фокусе |
 | `kumiko menubar show\|hide\|toggle` | показывает или прячет значки строки меню левее разделителя |

@@ -19,6 +19,11 @@ public final class Hotkeys {
 	private var modeTimer: Timer?
 	private var activationObserver: (any NSObjectProtocol)?
 	private var secureInputTimer: Timer?
+	private var secureInput = false
+	private var refreshingSecureHotkeys = false
+	// Commands queued before an interruption must not run when input resumes.
+	private var inputGeneration: UInt64 = 0
+	private var inputDiagnostics = InputDiagnostics()
 	private lazy var secureHotkeys = SecureHotkeys { [weak self] combo in
 		self?.handleSecureHotkey(combo)
 	}
@@ -28,10 +33,27 @@ public final class Hotkeys {
 	/// Gets every key event the hotkeys pass on, with whether it is a press; returning true
 	/// swallows it. Vim modes sit here, behind the hotkeys.
 	public var passthrough: (@MainActor (CGEvent, Bool) -> Bool)?
+	/// The consumer missed the same events: discard its pending input state too.
+	public var resetPassthrough: (@MainActor () -> Void)?
+
+	public var diagnostics: InputDiagnostics {
+		var result = inputDiagnostics
+		result.tapEnabled = tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
+		result.secureInput = secureInput
+		result.mode = engine.mode
+		result.secureRegistrations = secureHotkeys.registrationCount
+		result.secureRegistrationFailures = secureHotkeys.registrationFailures
+		result.lastRegistrationError = secureHotkeys.lastError
+		return result
+	}
 	public var isRunning: Bool { tap != nil }
 	/// Every key goes through untouched, Vim's too: the settings window records a shortcut.
 	public var isPaused = false {
-		didSet { refreshSecureHotkeys() }
+		didSet {
+			guard oldValue != isPaused else { return }
+			resetKeyboardState()
+			refreshSecureHotkeys()
+		}
 	}
 
 	/// `run` executes a kumiko command, the same way the CLI does.
@@ -82,8 +104,7 @@ public final class Hotkeys {
 		source = nil
 		tap = nil
 
-		apply(engine.reset())
-		scheduleExpiry()
+		resetKeyboardState()
 	}
 
 	public func apply(_ config: Config.Hotkeys) {
@@ -127,7 +148,18 @@ public final class Hotkeys {
 	}
 
 	private func refreshSecureHotkeys() {
-		guard tap != nil, config.enabled, !isPaused, IsSecureEventInputEnabled(),
+		refreshSecureHotkeys(secureInput: IsSecureEventInputEnabled())
+	}
+
+	func refreshSecureHotkeys(secureInput enabled: Bool) {
+		guard !refreshingSecureHotkeys else { return }
+		refreshingSecureHotkeys = true
+		defer { refreshingSecureHotkeys = false }
+		if secureInput != enabled {
+			secureInput = enabled
+			resetKeyboardState()
+		}
+		guard tap != nil, config.enabled, !isPaused, enabled,
 		      !(Self.frontmostApp().map { config.blacklist.contains($0) } ?? false) else {
 			secureHotkeys.update([])
 			return
@@ -136,7 +168,12 @@ public final class Hotkeys {
 	}
 
 	private func handleSecureHotkey(_ combo: KeyCombo) {
-		guard !isPaused, config.enabled else { return }
+		inputDiagnostics.secureCallbacks += 1
+		guard !isPaused, config.enabled, secureInput, IsSecureEventInputEnabled() else {
+			inputDiagnostics.discardedSecureCallbacks += 1
+			refreshSecureHotkeys()
+			return
+		}
 		let event = KeyEvent(keyCode: combo.keyCode, modifiers: [], isDown: true)
 		let (_, effects) = engine.handle(event, frontmostApp: Self.frontmostApp(), registeredCombo: combo)
 		_ = engine.handle(KeyEvent(keyCode: combo.keyCode, modifiers: [], isDown: false), frontmostApp: nil)
@@ -146,15 +183,23 @@ public final class Hotkeys {
 
 	/// Runs on the main thread for every key event, so it only decides; commands run afterwards.
 	/// Returns whether the event goes on, rewritten in place when it is remapped.
-	fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
+	func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
+		let began = ProcessInfo.processInfo.systemUptime
+		defer {
+			let milliseconds = (ProcessInfo.processInfo.systemUptime - began) * 1000
+			inputDiagnostics.maxCallbackMilliseconds = max(inputDiagnostics.maxCallbackMilliseconds, milliseconds)
+			if milliseconds >= 50 { inputDiagnostics.slowCallbacks += 1 }
+		}
 		switch type {
 		case .flagsChanged:
 			refreshSecureHotkeys()
 			return true
 		case .tapDisabledByTimeout, .tapDisabledByUserInput:
 			// macOS turns a slow tap off; turn it back on, from a clean slate.
+			if type == .tapDisabledByTimeout { inputDiagnostics.tapTimeouts += 1 }
+			else { inputDiagnostics.tapUserDisables += 1 }
+			resetKeyboardState()
 			if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-			apply(engine.reset())
 			return true
 		case .keyDown, .keyUp:
 			break
@@ -167,6 +212,8 @@ public final class Hotkeys {
 		}
 
 		guard !isPaused else { return true }
+		let secureNow = IsSecureEventInputEnabled()
+		if secureNow != secureInput { refreshSecureHotkeys(secureInput: secureNow) }
 
 		let keyEvent = KeyEvent(
 			keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
@@ -174,6 +221,9 @@ public final class Hotkeys {
 			isDown: type == .keyDown,
 			isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 		)
+		if !keyEvent.modifiers.intersection([.unsidedCmd, .unsidedAlt, .unsidedCtrl, .unsidedShift]).isEmpty {
+			inputDiagnostics.unsidedModifierEvents += 1
+		}
 
 		let (decision, effects) = engine.handle(keyEvent, frontmostApp: Self.frontmostApp())
 		later(effects)
@@ -194,9 +244,21 @@ public final class Hotkeys {
 	/// Effects of an event the tap is still deciding on: they run once it has gone on its way.
 	private func later(_ effects: [Effect]) {
 		guard !effects.isEmpty else { return }
+		let generation = inputGeneration
 		DispatchQueue.main.async { [weak self] in
-			MainActor.assumeIsolated { self?.apply(effects) }
+			MainActor.assumeIsolated {
+				guard let self, self.inputGeneration == generation else { return }
+				self.apply(effects)
+			}
 		}
+	}
+
+	private func resetKeyboardState() {
+		inputGeneration &+= 1
+		inputDiagnostics.stateResets += 1
+		resetPassthrough?()
+		apply(engine.reset())
+		scheduleExpiry()
 	}
 
 	/// Sets the timer to the mode's deadline again: a key in the mode moves it on.
@@ -224,7 +286,9 @@ public final class Hotkeys {
 			case let .shell(command):
 				Self.shell(command, environment: [:])
 			case let .modeChanged(mode):
+				guard mode == engine.mode else { continue }
 				refreshSecureHotkeys()
+				guard mode == engine.mode else { continue }
 				bus.publish(.hotkeyModeChanged(mode))
 				if let hook = config.onModeChange {
 					Self.shell(hook, environment: ["KUMIKO_MODE": mode])
@@ -294,6 +358,16 @@ public final class Hotkeys {
 		var held: HeldModifiers = []
 		for (bit, modifier) in sideBits where flags.rawValue & bit != 0 {
 			held.insert(modifier)
+		}
+		// A family flag without side bits still means a modifier, but says nothing about its side.
+		let families: [(CGEventFlags, HeldModifiers, HeldModifiers)] = [
+			(.maskCommand, [.leftCmd, .rightCmd], .unsidedCmd),
+			(.maskAlternate, [.leftAlt, .rightAlt], .unsidedAlt),
+			(.maskControl, [.leftCtrl, .rightCtrl], .unsidedCtrl),
+			(.maskShift, [.leftShift, .rightShift], .unsidedShift),
+		]
+		for (flag, sides, unsided) in families where flags.contains(flag) && held.intersection(sides).isEmpty {
+			held.insert(unsided)
 		}
 		if flags.contains(.maskSecondaryFn) { held.insert(.fn) }
 		return held

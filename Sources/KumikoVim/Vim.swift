@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import KumikoCore
 
 /// Vim modes in any text field, replacing SketchyVim.
@@ -22,6 +23,11 @@ public final class Vim {
 	/// Keys whose press Vim took, so the release does not reach the app on its own either.
 	private var swallowed: Set<UInt16> = []
 	private var shown: String?
+	public var inputMode: String? { field == nil ? nil : mode.rawValue }
+
+	public func resetInput() {
+		detach()
+	}
 
 	private static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
 
@@ -48,6 +54,10 @@ public final class Vim {
 	/// Called for every key event the hotkeys left alone. Returns whether Vim took it.
 	public func handle(_ event: CGEvent, isDown: Bool) -> Bool {
 		guard config.enabled else { return false }
+		if IsSecureEventInputEnabled() {
+			resetInput()
+			return false
+		}
 
 		let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
 		guard isDown else { return swallowed.remove(keyCode) != nil }
@@ -66,6 +76,8 @@ public final class Vim {
 		}
 
 		if let field, CFEqual(field, element) {} else {
+			engine?.resetInput()
+			swallowed.removeAll()
 			field = element
 			mode = .insert
 			written = nil
@@ -115,6 +127,8 @@ public final class Vim {
 	}
 
 	private func detach() {
+		engine?.resetInput()
+		swallowed.removeAll()
 		field = nil
 		mode = .insert
 		written = nil

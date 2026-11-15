@@ -37,9 +37,14 @@ final class Engine {
 			_ = vimBufferOpen(&bytes, 1, 0)
 			Self.started = true
 		}
+		resetInput()
 		// Plain Vim behaviour, whatever a vimrc would have set, then the user's own.
 		run("set nocompatible")
 		commands.forEach(run)
+	}
+
+	func resetInput() {
+		input(.key("<Esc>"))
 	}
 
 	func run(_ command: String) {

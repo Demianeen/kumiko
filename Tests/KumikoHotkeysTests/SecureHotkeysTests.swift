@@ -6,7 +6,7 @@ import Testing
 
 @MainActor
 struct SecureHotkeysTests {
-	@Test func registeredSystemEventReachesCommandHandler() throws {
+	@Test func registeredDispatcherEventReachesCommandHandler() throws {
 		let combo = try KeyCombo.parse("cmd + ctrl + shift - f20")
 		var received: [KeyCombo] = []
 		let hotkeys = SecureHotkeys { received.append($0) }
@@ -20,11 +20,11 @@ struct SecureHotkeysTests {
 		var id = EventHotKeyID(signature: 0x4B554D49, id: 1)
 		#expect(SetEventParameter(created, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
 		                          MemoryLayout<EventHotKeyID>.size, &id) == noErr)
-		#expect(SendEventToEventTarget(created, GetApplicationEventTarget()) == noErr)
+		#expect(SendEventToEventTarget(created, GetEventDispatcherTarget()) == noErr)
 		#expect(received == [combo])
 
 		hotkeys.update([])
-		#expect(SendEventToEventTarget(created, GetApplicationEventTarget()) == OSStatus(eventNotHandledErr))
+		#expect(SendEventToEventTarget(created, GetEventDispatcherTarget()) == OSStatus(eventNotHandledErr))
 		#expect(received == [combo])
 	}
 
