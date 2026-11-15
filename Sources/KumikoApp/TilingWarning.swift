@@ -11,7 +11,7 @@ struct TilingWarning: View {
 					.foregroundStyle(.orange)
 					.accessibilityHidden(true)
 				VStack(alignment: .leading, spacing: 4) {
-					Text("These open windows cannot be tiled.")
+					Text("Tiling warnings")
 					ForEach(Array(Set(reasons)).sorted(), id: \.self) { reason in
 						Text(reason)
 					}
