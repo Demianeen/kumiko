@@ -19,6 +19,11 @@ public final class Borders {
 	private var focused: UInt32?
 	private var overlay: BorderWindow?
 	private var observers: [any NSObjectProtocol] = []
+	/// Watches the Dock for Mission Control, App Exposé and Show Desktop.
+	private var dockObserver: AXObserver?
+	/// While one of them is open the frame steps aside: macOS animates the overlay like any window,
+	/// and the frame would shrink to the middle of the screen and grow back out of it.
+	private var isExposeOpen = false
 	/// Told which of kumiko's own windows is in focus, nil when none is, so the WindowServer's move
 	/// events come for it too and the frame keeps up with a drag.
 	public var onOwnWindow: @MainActor (UInt32?) -> Void = { _ in }
@@ -39,6 +44,58 @@ public final class Borders {
 		bus.subscribe { [weak self] event in self?.handle(event) }
 		observeOwnWindows()
 		observeAccentColor()
+		observeDock()
+		update()
+	}
+
+	/// The Dock runs Mission Control and says when it opens and closes. A Dock that restarts, as
+	/// after `killall Dock`, gets a new observer; one that quit mid-animation closed it too.
+	private func observeDock() {
+		register()
+		observers.append(
+			NSWorkspace.shared.notificationCenter.addObserver(
+				forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+			) { [weak self] notification in
+				let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+				guard app?.bundleIdentifier == "com.apple.dock" else { return }
+				MainActor.assumeIsolated {
+					guard let self else { return }
+					self.isExposeOpen = false
+					self.register()
+					self.update()
+				}
+			}
+		)
+	}
+
+	private static let exposeOpened = ["AXExposeShowAllWindows", "AXExposeShowFrontWindows", "AXExposeShowDesktop"]
+	private static let exposeClosed = "AXExposeExit"
+
+	private func register() {
+		if let old = dockObserver {
+			CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(old), .defaultMode)
+			dockObserver = nil
+		}
+		guard
+			let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+		else { return }
+
+		var observer: AXObserver?
+		guard AXObserverCreate(dock.processIdentifier, dockCallback, &observer) == .success, let observer else { return }
+		let element = AXUIElementCreateApplication(dock.processIdentifier)
+		// The observer outlives nothing it points at: Borders lives as long as kumiko.
+		let refcon = Unmanaged.passUnretained(self).toOpaque()
+		for name in Self.exposeOpened + [Self.exposeClosed] {
+			AXObserverAddNotification(observer, element, name as CFString, refcon)
+		}
+		CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+		dockObserver = observer
+	}
+
+	fileprivate func exposeChanged(_ name: String) {
+		let isOpen = Self.exposeOpened.contains(name)
+		guard isOpen != isExposeOpen || name == Self.exposeClosed else { return }
+		isExposeOpen = isOpen
 		update()
 	}
 
@@ -172,7 +229,7 @@ public final class Borders {
 	private func update() {
 		onOwnWindow(ownFocused.map { UInt32($0.windowNumber) })
 
-		guard config.enabled, let (id, bounds) = target() else {
+		guard config.enabled, !isExposeOpen, let (id, bounds) = target() else {
 			overlay?.orderOut(nil)
 			return
 		}
@@ -258,8 +315,10 @@ private final class BorderWindow: NSWindow {
 		ignoresMouseEvents = true
 		isReleasedWhenClosed = false
 		level = .normal
-		// Present on every Space, never in cmd-tab, Exposé or the window cycle.
-		collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .transient]
+		// Present on every Space, never in cmd-tab or the window cycle, and left in place by Exposé:
+		// `.transient` would have Mission Control shrink it away, which shows as the frame flying to
+		// the middle of the screen. Borders hides it once the Dock says Mission Control is open.
+		collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
 		let view = NSView()
 		view.wantsLayer = true
@@ -320,4 +379,12 @@ private final class BorderWindow: NSWindow {
 		// Hands the new path to the render server now instead of at the end of this run loop pass.
 		CATransaction.flush()
 	}
+}
+
+/// The Dock's Exposé notifications arrive on the main run loop, where the observer was added.
+private func dockCallback(_: AXObserver, _: AXUIElement, _ name: CFString, _ refcon: UnsafeMutableRawPointer?) {
+	guard let refcon else { return }
+	let borders = Unmanaged<Borders>.fromOpaque(refcon).takeUnretainedValue()
+	let name = name as String
+	MainActor.assumeIsolated { borders.exposeChanged(name) }
 }
