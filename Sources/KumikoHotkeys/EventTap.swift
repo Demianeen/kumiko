@@ -184,6 +184,11 @@ public final class Hotkeys {
 			return state.secureInput != enabled
 		}
 		if changed { resetKeyboardState() }
+		updateSecureRegistrations(secureInput: enabled)
+	}
+
+	/// Registers the secure input hotkeys when secure input is on, without touching the shared state.
+	private func updateSecureRegistrations(secureInput enabled: Bool) {
 		guard tap != nil, config.enabled, !isPaused, enabled,
 		      !(Self.frontmostApp().map { config.blacklist.contains($0) } ?? false) else {
 			secureHotkeys.update([])
@@ -289,10 +294,16 @@ public final class Hotkeys {
 
 		if let reset {
 			onMain { hotkeys in
+				// Read now, not when the key came: by the time the main thread gets here the tap may
+				// have stopped, or seen secure input flip again. A newer flip queues its own block
+				// after this one, so the effects still arrive in order.
+				let (stopped, secure) = hotkeys.shared.withLock { ($0.isStopped, $0.secureInput) }
+				guard !stopped else { return }
 				hotkeys.resetPassthrough?()
 				hotkeys.apply(reset)
-				// The state already says so; this only brings the secure input registrations along.
-				hotkeys.refreshSecureHotkeys(secureInput: secureNow)
+				// The tap owns the shared value now; this only brings the registrations along, and
+				// writes nothing a key on the tap thread could have changed in between.
+				hotkeys.updateSecureRegistrations(secureInput: secure)
 			}
 		}
 		later(effects, generation: generation)

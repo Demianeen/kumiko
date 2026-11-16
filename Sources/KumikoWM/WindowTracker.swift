@@ -31,12 +31,15 @@ public final class WindowTracker {
 	private var looksScheduled: Set<pid_t> = []
 	/// Tracked windows whose last read timed out, with how many times they were read again since.
 	private var busyRetries: [UInt32: Int] = [:]
-	private var busyRetryPending: Set<UInt32> = []
+	/// The pending retry per window, by token: a timer left over from before a stop or an untrack
+	/// finds a different token, or none, and does nothing.
+	private var busyRetryPending: [UInt32: Int] = [:]
 	/// How long to wait before reading a busy window again: sooner at first, then every 30 s for as
 	/// long as its app stays busy.
 	private static let busyDelays: [TimeInterval] = [1, 3, 10, 30]
 	/// Windows whose resize probe waits for the mouse buttons to come up.
-	private var waitingForMouseUp: Set<UInt32> = []
+	private var waitingForMouseUp: [UInt32: Int] = [:]
+	private var nextToken = 0
 	private static var listensToWindowServer = false
 	/// How long after a WindowServer event the app's window list is read, and read again while a
 	/// window it announced is not there yet.
@@ -121,8 +124,8 @@ public final class WindowTracker {
 		rescanTimer = nil
 		awaiting = [:]
 		busyRetries = [:]
-		busyRetryPending = []
-		waitingForMouseUp = []
+		busyRetryPending = [:]
+		waitingForMouseUp = [:]
 
 		guard isRunning else { return }
 		isRunning = false
@@ -291,13 +294,17 @@ public final class WindowTracker {
 	/// Reads a busy window again later. Once its app answers, nothing else might ask for it: the
 	/// notification that found it busy has been spent.
 	private func retryWhenAnswering(_ id: UInt32) {
-		guard busyRetryPending.insert(id).inserted else { return }
+		guard busyRetryPending[id] == nil else { return }
+		nextToken &+= 1
+		let token = nextToken
+		busyRetryPending[id] = token
 		let attempt = busyRetries[id, default: 0]
 		busyRetries[id] = attempt + 1
 		let delay = Self.busyDelays[min(attempt, Self.busyDelays.count - 1)]
 		DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
 			MainActor.assumeIsolated {
-				guard let self, self.busyRetryPending.remove(id) != nil else { return }
+				guard let self, self.busyRetryPending[id] == token else { return }
+				self.busyRetryPending[id] = nil
 				self.refresh(id)
 			}
 		}
@@ -305,17 +312,20 @@ public final class WindowTracker {
 
 	/// Reads a window again once no mouse button is down, for a resize probe that waited for that.
 	private func refreshAfterMouseUp(_ id: UInt32) {
-		guard waitingForMouseUp.insert(id).inserted else { return }
+		guard waitingForMouseUp[id] == nil else { return }
+		nextToken &+= 1
+		let token = nextToken
+		waitingForMouseUp[id] = token
 
 		func check() {
 			DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
 				MainActor.assumeIsolated {
-					guard let self, self.waitingForMouseUp.contains(id) else { return }
+					guard let self, self.waitingForMouseUp[id] == token else { return }
 					if NSEvent.pressedMouseButtons != 0 {
 						check()
 						return
 					}
-					self.waitingForMouseUp.remove(id)
+					self.waitingForMouseUp[id] = nil
 					self.refresh(id)
 				}
 			}
@@ -407,8 +417,8 @@ public final class WindowTracker {
 		resizeChecks.removeValue(forKey: id)?.cancel()
 		resizeRetryAfter[id] = nil
 		busyRetries[id] = nil
-		busyRetryPending.remove(id)
-		waitingForMouseUp.remove(id)
+		busyRetryPending[id] = nil
+		waitingForMouseUp[id] = nil
 
 		apps[info.pid]?.forget(id)
 		bus.publish(.windowDestroyed(id: id))
