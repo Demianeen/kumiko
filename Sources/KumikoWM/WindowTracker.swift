@@ -29,6 +29,14 @@ public final class WindowTracker {
 	/// yet, by app.
 	private var awaiting: [pid_t: Set<UInt32>] = [:]
 	private var looksScheduled: Set<pid_t> = []
+	/// Tracked windows whose last read timed out, with how many times they were read again since.
+	private var busyRetries: [UInt32: Int] = [:]
+	private var busyRetryPending: Set<UInt32> = []
+	/// How long to wait before reading a busy window again: sooner at first, then every 30 s for as
+	/// long as its app stays busy.
+	private static let busyDelays: [TimeInterval] = [1, 3, 10, 30]
+	/// Windows whose resize probe waits for the mouse buttons to come up.
+	private var waitingForMouseUp: Set<UInt32> = []
 	private static var listensToWindowServer = false
 	/// How long after a WindowServer event the app's window list is read, and read again while a
 	/// window it announced is not there yet.
@@ -112,6 +120,9 @@ public final class WindowTracker {
 		rescanTimer?.invalidate()
 		rescanTimer = nil
 		awaiting = [:]
+		busyRetries = [:]
+		busyRetryPending = []
+		waitingForMouseUp = []
 
 		guard isRunning else { return }
 		isRunning = false
@@ -277,6 +288,42 @@ public final class WindowTracker {
 		}
 	}
 
+	/// Reads a busy window again later. Once its app answers, nothing else might ask for it: the
+	/// notification that found it busy has been spent.
+	private func retryWhenAnswering(_ id: UInt32) {
+		guard busyRetryPending.insert(id).inserted else { return }
+		let attempt = busyRetries[id, default: 0]
+		busyRetries[id] = attempt + 1
+		let delay = Self.busyDelays[min(attempt, Self.busyDelays.count - 1)]
+		DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+			MainActor.assumeIsolated {
+				guard let self, self.busyRetryPending.remove(id) != nil else { return }
+				self.refresh(id)
+			}
+		}
+	}
+
+	/// Reads a window again once no mouse button is down, for a resize probe that waited for that.
+	private func refreshAfterMouseUp(_ id: UInt32) {
+		guard waitingForMouseUp.insert(id).inserted else { return }
+
+		func check() {
+			DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+				MainActor.assumeIsolated {
+					guard let self, self.waitingForMouseUp.contains(id) else { return }
+					if NSEvent.pressedMouseButtons != 0 {
+						check()
+						return
+					}
+					self.waitingForMouseUp.remove(id)
+					self.refresh(id)
+				}
+			}
+		}
+
+		check()
+	}
+
 	/// Moves and resizes come dozens a second while a window is dragged, and each reread is a
 	/// round trip to an app that is busy redrawing. While a mouse button is down the reread waits
 	/// for it to come up: the WindowServer's events carry the drag in the meantime. Otherwise the
@@ -315,12 +362,15 @@ public final class WindowTracker {
 		case let .window(described):
 			info = described
 		case .busy:
-			// The app is busy, not the window gone: it stays as it was, and in the layout.
+			// The app is busy, not the window gone: it stays as it was, and in the layout, until the
+			// app answers again.
+			retryWhenAnswering(id)
 			return
 		case .gone:
 			untrack(id)
 			return
 		}
+		busyRetries[id] = nil
 
 		guard info != old else { return }
 
@@ -356,6 +406,9 @@ public final class WindowTracker {
 		resizeStates[id] = nil
 		resizeChecks.removeValue(forKey: id)?.cancel()
 		resizeRetryAfter[id] = nil
+		busyRetries[id] = nil
+		busyRetryPending.remove(id)
+		waitingForMouseUp.remove(id)
 
 		apps[info.pid]?.forget(id)
 		bus.publish(.windowDestroyed(id: id))
@@ -405,9 +458,14 @@ public final class WindowTracker {
 		let isResizable = axes?.isResizable ?? axResizable ?? previous?.isResizable ?? true
 		let isResizePending = config.floatFixedSize && axes == nil && subrole == "AXStandardWindow"
 		if (isResizePending || state.needsCheck) && !isHidden && !isMinimized && !isFullscreen
-			&& NSEvent.pressedMouseButtons == 0 && Display.all().contains(where: { $0.visibleFrame.intersects(frame) })
+			&& Display.all().contains(where: { $0.visibleFrame.intersects(frame) })
 		{
-			checkResize(element, id: id, pid: observer.pid)
+			if NSEvent.pressedMouseButtons == 0 {
+				checkResize(element, id: id, pid: observer.pid)
+			} else {
+				// A probe never starts during a drag; until it runs, the window waits out of the layout.
+				refreshAfterMouseUp(id)
+			}
 		}
 
 		return .window(WindowInfo(
@@ -500,14 +558,17 @@ public final class WindowTracker {
 	/// A window the WindowServer has but AX does not list yet is looked for again later; one that
 	/// never shows up is not a window AX knows, a helper window say, and is let go.
 	private func look(at pid: pid_t, attempt: Int) {
-		looksScheduled.remove(pid)
 		guard isRunning, let observer = apps[pid] else {
+			looksScheduled.remove(pid)
 			awaiting[pid] = nil
 			return
 		}
 
+		// Still marked while the list is read, so a window found busy in it joins this round of
+		// tries rather than starting the count over.
 		observer.rescan()
 		updateTabs(of: observer)
+		looksScheduled.remove(pid)
 
 		let missing = (awaiting[pid] ?? []).filter { windows[$0] == nil && Self.appWindowOwner($0) == pid }
 		awaiting[pid] = missing.isEmpty ? nil : missing
