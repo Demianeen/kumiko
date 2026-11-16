@@ -24,6 +24,13 @@ public final class Borders {
 	/// While one of them is open the frame steps aside: macOS animates the overlay like any window,
 	/// and the frame would shrink to the middle of the screen and grow back out of it.
 	private var isExposeOpen = false
+	/// Hears the Mission Control shortcuts, which come before the animation; the Dock's own word
+	/// comes about 0.4 s into it, by when the frame has been seen lingering.
+	private var shortcutTap: CFMachPort?
+	private var shortcuts = MissionControlShortcuts.current()
+	private var shortcutsRead = Date()
+	/// Set by a shortcut, cleared once the Dock confirms or the wait for it ran out.
+	private var awaitingDock = 0
 	/// Told which of kumiko's own windows is in focus, nil when none is, so the WindowServer's move
 	/// events come for it too and the frame keeps up with a drag.
 	public var onOwnWindow: @MainActor (UInt32?) -> Void = { _ in }
@@ -45,7 +52,57 @@ public final class Borders {
 		observeOwnWindows()
 		observeAccentColor()
 		observeDock()
+		listenForShortcuts()
 		update()
+	}
+
+	/// A listen-only tap: it sees keys without holding any of them up.
+	private func listenForShortcuts() {
+		let refcon = Unmanaged.passUnretained(self).toOpaque()
+		guard
+			let tap = CGEvent.tapCreate(
+				tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
+				eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue), callback: shortcutCallback,
+				userInfo: refcon
+			)
+		else { return }
+
+		CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+		CGEvent.tapEnable(tap: tap, enable: true)
+		shortcutTap = tap
+	}
+
+	fileprivate func keyDown(_ event: CGEvent) {
+		// Shortcuts changed in System Settings are picked up within a few seconds; macOS does not say
+		// when they change.
+		if Date().timeIntervalSince(shortcutsRead) > 5 {
+			shortcuts = MissionControlShortcuts.current()
+			shortcutsRead = Date()
+		}
+		guard !isExposeOpen,
+		      shortcuts.matches(
+		      	keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags.rawValue
+		      )
+		else { return }
+
+		isExposeOpen = true
+		awaitingDock &+= 1
+		let token = awaitingDock
+		update()
+
+		// A shortcut that opened nothing, taken by an app or turned off since, gives the frame back.
+		DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+			MainActor.assumeIsolated {
+				guard let self, self.awaitingDock == token else { return }
+				self.awaitingDock = 0
+				self.isExposeOpen = false
+				self.update()
+			}
+		}
+	}
+
+	fileprivate func tapDisabled() {
+		if let shortcutTap { CGEvent.tapEnable(tap: shortcutTap, enable: true) }
 	}
 
 	/// The Dock runs Mission Control and says when it opens and closes. A Dock that restarts, as
@@ -61,6 +118,7 @@ public final class Borders {
 				MainActor.assumeIsolated {
 					guard let self else { return }
 					self.isExposeOpen = false
+					self.awaitingDock = 0
 					self.register()
 					self.update()
 				}
@@ -94,6 +152,8 @@ public final class Borders {
 
 	fileprivate func exposeChanged(_ name: String) {
 		let isOpen = Self.exposeOpened.contains(name)
+		// The Dock confirms what a shortcut started; the frame is hidden already.
+		awaitingDock = 0
 		guard isOpen != isExposeOpen || name == Self.exposeClosed else { return }
 		isExposeOpen = isOpen
 		update()
@@ -387,4 +447,21 @@ private func dockCallback(_: AXObserver, _: AXUIElement, _ name: CFString, _ ref
 	let borders = Unmanaged<Borders>.fromOpaque(refcon).takeUnretainedValue()
 	let name = name as String
 	MainActor.assumeIsolated { borders.exposeChanged(name) }
+}
+
+/// Runs on the main run loop, where the tap's source was added.
+private func shortcutCallback(
+	_: CGEventTapProxy, _ type: CGEventType, _ event: CGEvent, _ refcon: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+	guard let refcon else { return Unmanaged.passUnretained(event) }
+	let borders = Unmanaged<Borders>.fromOpaque(refcon).takeUnretainedValue()
+	nonisolated(unsafe) let event = event
+	MainActor.assumeIsolated {
+		switch type {
+		case .keyDown: borders.keyDown(event)
+		case .tapDisabledByTimeout, .tapDisabledByUserInput: borders.tapDisabled()
+		default: break
+		}
+	}
+	return Unmanaged.passUnretained(event)
 }
