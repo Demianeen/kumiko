@@ -19,7 +19,10 @@ public final class Hotkeys {
 	struct Shared: Sendable {
 		var engine: Engine
 		var isPaused = false
-		/// The app in front, kept up to date from the main thread: AppKit is not asked from the tap.
+		/// Set while the tap is off, so a key the tap was still deciding when it stopped does nothing.
+		var isStopped = false
+		/// The app in front, as the main thread last saw it. Keys say which app they go to themselves;
+		/// this is for the rare key that does not, and for the secure input fallback.
 		var frontmostApp: String?
 		/// Whether anything listens behind the hotkeys (Vim). Only then does a passed key wait for
 		/// the main thread, where that listener lives.
@@ -136,6 +139,7 @@ public final class Hotkeys {
 		secureInputTimer = nil
 		secureHotkeys.stop()
 
+		shared.withLock { $0.isStopped = true }
 		tap?.stop()
 		tap = nil
 
@@ -157,6 +161,7 @@ public final class Hotkeys {
 		else { return false }
 
 		self.tap = tap
+		shared.withLock { $0.isStopped = false }
 		let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
 			MainActor.assumeIsolated { self?.refreshSecureHotkeys() }
 		}
@@ -224,7 +229,8 @@ public final class Hotkeys {
 		case .tapDisabledByTimeout, .tapDisabledByUserInput:
 			// macOS turns a slow tap off; it is turned back on by the tap itself, and the state starts
 			// clean, here and in Vim.
-			let effects = shared.withLock { state in
+			let effects = shared.withLock { state -> [Effect] in
+				guard !state.isStopped else { return [] }
 				if type == .tapDisabledByTimeout { state.diagnostics.tapTimeouts += 1 }
 				else { state.diagnostics.tapUserDisables += 1 }
 				return Self.reset(&state)
@@ -240,7 +246,7 @@ public final class Hotkeys {
 		case .leftMouseDown, .rightMouseDown, .otherMouseDown:
 			// The click goes on as it is; only the mode ends.
 			let (effects, generation) = shared.withLock { state in
-				(state.isPaused ? [] : state.engine.click(), state.generation)
+				(state.isPaused || state.isStopped ? [] : state.engine.click(), state.generation)
 			}
 			later(effects, generation: generation)
 			return true
@@ -256,22 +262,38 @@ public final class Hotkeys {
 			isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 		)
 		let lockedScreen = Self.isScreenLocked()
+		// The WindowServer has already picked the app this key goes to. The main thread's idea of
+		// the front app lags while it is busy, and the blacklist must not: a key meant for Screen
+		// Sharing has to reach it even then.
+		let target = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+		let targetApp = target > 0 ? NSRunningApplication(processIdentifier: target)?.localizedName : nil
 
-		let outcome: (Decision, [Effect], UInt64, Bool)? = shared.withLock { state in
-			guard !state.isPaused else { return nil }
+		let outcome: (Decision, [Effect], UInt64, Bool, [Effect]?)? = shared.withLock { state in
+			guard !state.isPaused, !state.isStopped else { return nil }
 			if !keyEvent.modifiers.intersection([.unsidedCmd, .unsidedAlt, .unsidedCtrl, .unsidedShift]).isEmpty {
 				state.diagnostics.unsidedModifierEvents += 1
 			}
-			// A change of secure input resets the state on the main thread; the key is decided with
-			// what is known now.
-			let frontmost = state.frontmostApp == "loginwindow" && !lockedScreen ? nil : state.frontmostApp
+			// Secure input coming or going starts a new input session before this key is decided,
+			// so the key's own command belongs to the new one.
+			var reset: [Effect]?
+			if secureNow != state.secureInput {
+				state.secureInput = secureNow
+				reset = Self.reset(&state)
+			}
+			let app = targetApp ?? state.frontmostApp
+			let frontmost = app == "loginwindow" && !lockedScreen ? nil : app
 			let (decision, effects) = state.engine.handle(keyEvent, frontmostApp: frontmost)
-			return (decision, effects, state.generation, state.passthroughEnabled)
+			return (decision, effects, state.generation, state.passthroughEnabled, reset)
 		}
-		guard let (decision, effects, generation, passthroughEnabled) = outcome else { return true }
+		guard let (decision, effects, generation, passthroughEnabled, reset) = outcome else { return true }
 
-		if secureNow != shared.withLock({ $0.secureInput }) {
-			onMain { $0.refreshSecureHotkeys(secureInput: secureNow) }
+		if let reset {
+			onMain { hotkeys in
+				hotkeys.resetPassthrough?()
+				hotkeys.apply(reset)
+				// The state already says so; this only brings the secure input registrations along.
+				hotkeys.refreshSecureHotkeys(secureInput: secureNow)
+			}
 		}
 		later(effects, generation: generation)
 		if keyEvent.isDown { onMain { $0.scheduleExpiry() } }
